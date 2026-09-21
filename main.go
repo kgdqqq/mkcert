@@ -1,10 +1,8 @@
 // Copyright 2018 The mkcert Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
-
 // Command mkcert is a simple zero-config tool to make development certificates.
 package main
-
 import (
 	"crypto"
 	"crypto/x509"
@@ -26,64 +24,57 @@ import (
 
 	"golang.org/x/net/idna"
 )
-
 const shortUsage = `Usage of mkcert:
-
 	$ mkcert -install
 	Install the local CA in the system trust store.
-
 	$ mkcert example.org
 	Generate "example.org.pem" and "example.org-key.pem".
-
 	$ mkcert example.com myapp.dev localhost 127.0.0.1 ::1
 	Generate "example.com+4.pem" and "example.com+4-key.pem".
-
 	$ mkcert "*.example.it"
 	Generate "_wildcard.example.it.pem" and "_wildcard.example.it-key.pem".
-
 	$ mkcert -uninstall
 	Uninstall the local CA (but do not delete it).
-
 `
-
 const advancedUsage = `Advanced options:
-
 	-cert-file FILE, -key-file FILE, -p12-file FILE
 	    Customize the output paths.
-
 	-client
 	    Generate a certificate for client authentication.
-
 	-ecdsa
 	    Generate a certificate with an ECDSA key.
-
 	-pkcs12
 	    Generate a ".p12" PKCS #12 file, also know as a ".pfx" file,
 	    containing certificate and key for legacy applications.
-
 	-csr CSR
 	    Generate a certificate based on the supplied CSR. Conflicts with
 	    all other flags and arguments except -install and -cert-file.
-
 	-CAROOT
 	    Print the CA certificate and key storage location.
-
+	-ca-cn CN
+	    自定义根CA CommonName（颁发者名称）
+	-ca-o ORG
+	    自定义根CA Organization（组织名称）
+	-ca-ou OU
+	    自定义根CA OrganizationalUnit（组织单位）
+	-ca-c COUNTRY
+	    自定义根CA Country（国家代码）
+	-ca-st PROVINCE
+	    自定义根CA Province（省份）
+	-ca-l LOCALITY
+	    自定义根CA Locality（城市）
 	$CAROOT (environment variable)
 	    Set the CA certificate and key storage location. (This allows
 	    maintaining multiple local CAs in parallel.)
-
 	$TRUST_STORES (environment variable)
 	    A comma-separated list of trust stores to install the local
 	    root CA into. Options are: "system", "java" and "nss" (includes
 	    Firefox). Autodetected by default.
-
 `
-
 // Version can be set at link time to override debug.BuildInfo.Main.Version,
 // which is "(devel)" when building from within the module. See
 // golang.org/issue/29814 and golang.org/issue/29228.
 var Version string
-
 func main() {
 	if len(os.Args) == 1 {
 		fmt.Print(shortUsage)
@@ -103,12 +94,39 @@ func main() {
 		keyFileFlag   = flag.String("key-file", "", "")
 		p12FileFlag   = flag.String("p12-file", "", "")
 		versionFlag   = flag.Bool("version", false, "")
+		caCNFlag      = flag.String("ca-cn", "", "")
+		caOFlag       = flag.String("ca-o", "", "")
+		caOUFlag      = flag.String("ca-ou", "", "")
+		caCFlag       = flag.String("ca-c", "", "")
+		caSTFlag      = flag.String("ca-st", "", "")
+		caLFlag       = flag.String("ca-l", "", "")
 	)
 	flag.Usage = func() {
 		fmt.Fprint(flag.CommandLine.Output(), shortUsage)
 		fmt.Fprintln(flag.CommandLine.Output(), `For more options, run "mkcert -help".`)
 	}
 	flag.Parse()
+
+	// 命令行参数覆盖默认CA信息
+	if *caCNFlag != "" {
+		caCommonName = *caCNFlag
+	}
+	if *caOFlag != "" {
+		caOrganization = *caOFlag
+	}
+	if *caOUFlag != "" {
+		caOrganizationalUnit = *caOUFlag
+	}
+	if *caCFlag != "" {
+		caCountry = *caCFlag
+	}
+	if *caSTFlag != "" {
+		caProvince = *caSTFlag
+	}
+	if *caLFlag != "" {
+		caLocality = *caLFlag
+	}
+
 	if *helpFlag {
 		fmt.Print(shortUsage)
 		fmt.Print(advancedUsage)
@@ -148,26 +166,21 @@ func main() {
 		certFile: *certFileFlag, keyFile: *keyFileFlag, p12File: *p12FileFlag,
 	}).Run(flag.Args())
 }
-
 const rootName = "rootCA.pem"
 const rootKeyName = "rootCA-key.pem"
-
 type mkcert struct {
 	installMode, uninstallMode bool
 	pkcs12, ecdsa, client      bool
 	keyFile, certFile, p12File string
 	csrPath                    string
-
 	CAROOT string
 	caCert *x509.Certificate
 	caKey  crypto.PrivateKey
-
 	// The system cert pool is only loaded once. After installing the root, checks
 	// will keep failing until the next execution. TODO: maybe execve?
 	// https://github.com/golang/go/issues/24540 (thanks, myself)
 	ignoreCheckFailure bool
 }
-
 func (m *mkcert) Run(args []string) {
 	m.CAROOT = getCAROOT()
 	if m.CAROOT == "" {
@@ -175,7 +188,6 @@ func (m *mkcert) Run(args []string) {
 	}
 	fatalIfErr(os.MkdirAll(m.CAROOT, 0755), "failed to create the CAROOT")
 	m.loadCA()
-
 	if m.installMode {
 		m.install()
 		if len(args) == 0 {
@@ -202,17 +214,14 @@ func (m *mkcert) Run(args []string) {
 			log.Println("Run \"mkcert -install\" for certificates to be trusted automatically ⚠️")
 		}
 	}
-
 	if m.csrPath != "" {
 		m.makeCertFromCSR()
 		return
 	}
-
 	if len(args) == 0 {
 		flag.Usage()
 		return
 	}
-
 	hostnameRegexp := regexp.MustCompile(`(?i)^(\*\.)?[0-9a-z_-]([0-9a-z._-]*[0-9a-z_-])?$`)
 	for i, name := range args {
 		if ip := net.ParseIP(name); ip != nil {
@@ -233,15 +242,12 @@ func (m *mkcert) Run(args []string) {
 			log.Fatalf("ERROR: %q is not a valid hostname, IP, URL or email", name)
 		}
 	}
-
 	m.makeCert(args)
 }
-
 func getCAROOT() string {
 	if env := os.Getenv("CAROOT"); env != "" {
 		return env
 	}
-
 	var dir string
 	switch {
 	case runtime.GOOS == "windows":
@@ -263,7 +269,6 @@ func getCAROOT() string {
 	}
 	return filepath.Join(dir, "mkcert")
 }
-
 func (m *mkcert) install() {
 	if storeEnabled("system") {
 		if m.checkPlatform() {
@@ -303,7 +308,6 @@ func (m *mkcert) install() {
 	}
 	log.Print("")
 }
-
 func (m *mkcert) uninstall() {
 	if storeEnabled("nss") && hasNSS {
 		if hasCertutil {
@@ -332,16 +336,13 @@ func (m *mkcert) uninstall() {
 		log.Print("")
 	}
 }
-
 func (m *mkcert) checkPlatform() bool {
 	if m.ignoreCheckFailure {
 		return true
 	}
-
 	_, err := m.caCert.Verify(x509.VerifyOptions{})
 	return err == nil
 }
-
 func storeEnabled(name string) bool {
 	stores := os.Getenv("TRUST_STORES")
 	if stores == "" {
@@ -354,31 +355,25 @@ func storeEnabled(name string) bool {
 	}
 	return false
 }
-
 func fatalIfErr(err error, msg string) {
 	if err != nil {
 		log.Fatalf("ERROR: %s: %s", msg, err)
 	}
 }
-
 func fatalIfCmdErr(err error, cmd string, out []byte) {
 	if err != nil {
 		log.Fatalf("ERROR: failed to execute \"%s\": %s\n\n%s\n", cmd, err, out)
 	}
 }
-
 func pathExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-
 func binaryExists(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
 }
-
 var sudoWarningOnce sync.Once
-
 func commandWithSudo(cmd ...string) *exec.Cmd {
 	if u, err := user.Current(); err == nil && u.Uid == "0" {
 		return exec.Command(cmd[0], cmd[1:]...)

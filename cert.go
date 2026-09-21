@@ -34,6 +34,16 @@ import (
 
 var userAndHostname string
 
+// ========== 新增：自定义CA信息，命令行可覆盖，默认与原版mkcert行为一致 ==========
+var (
+	caCommonName         = ""
+	caOrganization       = "mkcert development CA"
+	caOrganizationalUnit = ""
+	caCountry            = ""
+	caProvince           = ""
+	caLocality           = ""
+)
+
 func init() {
 	u, err := user.Current()
 	if err == nil {
@@ -44,6 +54,13 @@ func init() {
 	}
 	if err == nil && u.Name != "" && u.Name != u.Username {
 		userAndHostname += " (" + u.Name + ")"
+	}
+	// 默认值：与原版mkcert保持一致
+	if caCommonName == "" {
+		caCommonName = "mkcert " + userAndHostname
+	}
+	if caOrganizationalUnit == "" {
+		caOrganizationalUnit = userAndHostname
 	}
 }
 
@@ -327,13 +344,16 @@ func (m *mkcert) newCA() {
 	tpl := &x509.Certificate{
 		SerialNumber: randomSerialNumber(),
 		Subject: pkix.Name{
-			Organization:       []string{"mkcert development CA"},
-			OrganizationalUnit: []string{userAndHostname},
+			Organization:       []string{caOrganization},
+			OrganizationalUnit: []string{caOrganizationalUnit},
+			Country:            []string{caCountry},
+			Province:           []string{caProvince},
+			Locality:           []string{caLocality},
 
 			// The CommonName is required by iOS to show the certificate in the
 			// "Certificate Trust Settings" menu.
 			// https://github.com/FiloSottile/mkcert/issues/47
-			CommonName: "mkcert " + userAndHostname,
+			CommonName: caCommonName,
 		},
 		SubjectKeyId: skid[:],
 
